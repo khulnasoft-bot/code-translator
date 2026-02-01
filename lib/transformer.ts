@@ -193,39 +193,88 @@ export function detectMixedLanguages(code: string): {
 }
 
 /**
+ * Pre-process code to prepare for transformation
+ */
+function preprocessCode(code: string): { processed: string; warnings: string[] } {
+  const warnings: string[] = []
+  let processed = code
+
+  // Normalize line endings
+  processed = processed.replace(/\r\n/g, '\n')
+
+  // Remove trailing whitespace on each line
+  processed = processed
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+
+  // Fix common spacing issues
+  processed = processed.replace(/(\w)\s+{/g, '$1 {')
+  processed = processed.replace(/,\s+/g, ', ')
+  processed = processed.replace(/\s+;/g, ';')
+
+  return { processed, warnings }
+}
+
+/**
  * Normalize mixed language code before transformation
  */
 export function normalizeCode(code: string): { normalized: string; warnings: string[] } {
   const warnings: string[] = []
   let normalized = code
 
+  // Pre-process first
+  const { processed: preprocessed, warnings: prepWarnings } = preprocessCode(code)
+  normalized = preprocessed
+  warnings.push(...prepWarnings)
+
   // Detect mixed languages
-  const mixed = detectMixedLanguages(code)
+  const mixed = detectMixedLanguages(normalized)
   if (mixed.detected) {
     warnings.push(`Mixed languages detected: ${mixed.languages.join(', ')}. Normalizing code...`)
   }
 
-  // Auto-correct missing colons (Python-style)
-  normalized = normalized.replace(/^(\s*(?:if|for|while|def|class).+?)(\n)/gm, (match, content, newline) => {
-    if (!content.trim().endsWith(':') && !content.trim().endsWith('{')) {
+  // Auto-correct elif → else if
+  normalized = normalized.replace(/^\s*elif\s+/gm, 'else if ')
+
+  // Auto-correct missing colons (Python-style) - for control structures
+  normalized = normalized.replace(/^(\s*(?:if|elif|else|for|while|def|class|try|except|finally|with).+?)(\n)/gm, (match, content, newline) => {
+    if (!content.trim().endsWith(':') && !content.trim().endsWith('{') && !content.trim().endsWith('else')) {
       return content + ':' + newline
     }
     return match
   })
 
-  // Auto-correct missing braces (JS/Java-style)
-  normalized = normalized.replace(/^(\s*(?:function|if|for|while|class).+?)(\n(?!\s*{))/gm, (match, content, newline) => {
-    if (!content.trim().endsWith('{')) {
+  // Auto-correct missing braces (JS/Java-style) - for control structures and functions
+  normalized = normalized.replace(/^(\s*(?:function|if|else|for|while|class|try|catch|finally).+?)(\n(?!\s*{))/gm, (match, content, newline) => {
+    if (!content.trim().endsWith('{') && !content.trim().endsWith('else')) {
       return content + ' {' + newline
     }
     return match
   })
 
-  // Fix inconsistent quote usage
-  normalized = normalized.replace(/(['"])([^'"]*)\1/g, '"$2"')
+  // Fix inconsistent quote usage (normalize to double quotes)
+  const lines = normalized.split('\n')
+  normalized = lines
+    .map((line) => {
+      // Don't touch comments
+      if (line.trim().startsWith('//') || line.trim().startsWith('#') || line.trim().startsWith('/*')) {
+        return line
+      }
+      // Convert single quotes to double quotes (simple approach)
+      return line.replace(/(?<!\\)'/g, '"')
+    })
+    .join('\n')
 
   // Remove duplicate semicolons
   normalized = normalized.replace(/;;+/g, ';')
+
+  // Fix mismatched operators: || and && in Python (and/or)
+  normalized = normalized.replace(/\|\|/g, 'or')
+  normalized = normalized.replace(/&&/g, 'and')
+
+  // Convert print() to appropriate format if needed
+  // This will be handled per-language in the transformation
 
   return { normalized, warnings }
 }
@@ -473,8 +522,9 @@ function transformPrintStatement(
   target: SupportedLanguage,
   warnings: string[]
 ): string {
-  if (source === 'python') {
-    return line.replace(/\bprint\s*\((.*?)\)/, (match, args) => {
+  // Python print
+  if (source === 'python' && line.includes('print')) {
+    return line.replace(/\bprint\s*\((.*?)\)(?=;|$)/g, (match, args) => {
       switch (target) {
         case 'javascript':
         case 'typescript':
@@ -482,13 +532,62 @@ function transformPrintStatement(
         case 'java':
           return `System.out.println(${args})`
         case 'cpp':
-          return `std::cout << ${args} << std::endl`
+          return `std::cout << ${args} << std::endl;`
         case 'go':
           return `fmt.Println(${args})`
         case 'csharp':
-          return `Console.WriteLine(${args})`
+          return `Console.WriteLine(${args});`
         case 'php':
-          return `echo ${args}`
+          return `echo ${args};`
+        case 'ruby':
+          return `puts ${args}`
+        default:
+          return match
+      }
+    })
+  }
+
+  // JavaScript/TypeScript console.log to other languages
+  if ((source === 'javascript' || source === 'typescript') && line.includes('console.log')) {
+    return line.replace(/\bconsole\.log\s*\((.*?)\)(?=;|$)/g, (match, args) => {
+      switch (target) {
+        case 'python':
+          return `print(${args})`
+        case 'java':
+          return `System.out.println(${args})`
+        case 'cpp':
+          return `std::cout << ${args} << std::endl;`
+        case 'go':
+          return `fmt.Println(${args})`
+        case 'csharp':
+          return `Console.WriteLine(${args});`
+        case 'php':
+          return `echo ${args};`
+        case 'ruby':
+          return `puts ${args}`
+        default:
+          return match
+      }
+    })
+  }
+
+  // Java System.out.println to other languages
+  if (source === 'java' && line.includes('System.out.println')) {
+    return line.replace(/System\.out\.println\s*\((.*?)\)(?=;|$)/g, (match, args) => {
+      switch (target) {
+        case 'python':
+          return `print(${args})`
+        case 'javascript':
+        case 'typescript':
+          return `console.log(${args})`
+        case 'cpp':
+          return `std::cout << ${args} << std::endl;`
+        case 'go':
+          return `fmt.Println(${args})`
+        case 'csharp':
+          return `Console.WriteLine(${args});`
+        case 'php':
+          return `echo ${args};`
         case 'ruby':
           return `puts ${args}`
         default:
@@ -697,19 +796,92 @@ export function buildAST(code: string, language: SupportedLanguage): ASTNode[] {
 }
 
 /**
- * Post-process code for language-specific cleanup
+ * Post-process code for language-specific cleanup and validation
  */
 function postProcessCode(code: string, targetLang: SupportedLanguage): string {
   let processed = code
 
-  // Add missing closing braces if needed
-  if (['javascript', 'typescript', 'java', 'cpp', 'csharp', 'go'].includes(targetLang)) {
+  // Language-specific post-processing
+  if (['javascript', 'typescript', 'java', 'cpp', 'csharp', 'go', 'rust'].includes(targetLang)) {
+    // Fix unmatched braces
     const openBraces = (processed.match(/{/g) || []).length
     const closeBraces = (processed.match(/}/g) || []).length
-    for (let i = 0; i < openBraces - closeBraces; i++) {
-      processed += '\n}'
+
+    if (openBraces > closeBraces) {
+      const missingCount = openBraces - closeBraces
+      processed += '\n' + '}'.repeat(missingCount)
+    } else if (closeBraces > openBraces) {
+      // Remove extra closing braces
+      const lines = processed.split('\n')
+      let removed = 0
+      for (let i = lines.length - 1; i >= 0 && removed < closeBraces - openBraces; i--) {
+        if (lines[i].trim() === '}') {
+          lines.splice(i, 1)
+          removed++
+        }
+      }
+      processed = lines.join('\n')
+    }
+
+    // Ensure proper spacing around braces
+    processed = processed.replace(/\n\s*{/g, ' {')
+  }
+
+  // Python-specific post-processing
+  if (targetLang === 'python') {
+    // Remove unnecessary semicolons
+    processed = processed.replace(/;$/gm, '')
+    // Ensure proper indentation
+    const lines = processed.split('\n')
+    processed = lines
+      .map((line) => {
+        if (line.trim().endsWith(':') || line.trim().endsWith('{')) {
+          return line
+        }
+        return line
+      })
+      .join('\n')
+  }
+
+  // Ruby-specific post-processing
+  if (targetLang === 'ruby') {
+    // Remove unnecessary braces and semicolons
+    processed = processed.replace(/{/g, '').replace(/}/g, '').replace(/;$/gm, '')
+  }
+
+  // Go-specific post-processing
+  if (targetLang === 'go') {
+    // Ensure package declaration is first (if not present, add placeholder)
+    if (!processed.includes('package ')) {
+      processed = 'package main\n\n' + processed
     }
   }
+
+  // Fix indentation consistency
+  const lines = processed.split('\n')
+  let inBlock = 0
+  processed = lines
+    .map((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return ''
+
+      // Decrease indent for closing braces
+      if (trimmed.startsWith('}') || trimmed.startsWith('end')) {
+        inBlock = Math.max(0, inBlock - 1)
+      }
+
+      // Get indent
+      const indent = '  '.repeat(inBlock)
+      let result = indent + trimmed
+
+      // Increase indent for opening braces
+      if (trimmed.endsWith('{') || trimmed.endsWith(':') || trimmed === 'do') {
+        inBlock++
+      }
+
+      return result
+    })
+    .join('\n')
 
   return processed
 }
