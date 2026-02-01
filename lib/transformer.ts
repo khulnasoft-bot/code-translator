@@ -12,6 +12,7 @@ export const SUPPORTED_LANGUAGES = [
   'csharp',
   'php',
   'ruby',
+  'swift',
 ] as const
 
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number]
@@ -28,16 +29,16 @@ export interface LineTransformation {
 // AST Node for code structure
 export interface ASTNode {
   type:
-    | 'function'
-    | 'class'
-    | 'if'
-    | 'for'
-    | 'while'
-    | 'import'
-    | 'variable'
-    | 'statement'
-    | 'block'
-    | 'comment'
+  | 'function'
+  | 'class'
+  | 'if'
+  | 'for'
+  | 'while'
+  | 'import'
+  | 'variable'
+  | 'statement'
+  | 'block'
+  | 'comment'
   name?: string
   content: string
   lineStart: number
@@ -321,6 +322,10 @@ export function detectLanguage(code: string): SupportedLanguage {
   // Ruby scoring
   if (code.includes('def ') && code.includes('end')) scores['ruby'] = (scores['ruby'] || 0) + 2
 
+  // Swift scoring
+  if (code.includes('func ') && (code.includes('var ') || code.includes('let '))) scores['swift'] = (scores['swift'] || 0) + 3
+  if (code.includes('import ') && !code.includes('from ')) scores['swift'] = (scores['swift'] || 0) + 1
+
   const detected = Object.entries(scores).sort(([, a], [, b]) => b - a)[0]?.[0] as SupportedLanguage
 
   return detected || 'javascript'
@@ -358,6 +363,7 @@ function transformLine(
     () => transformFunctionDef(transformed, sourceLang, targetLang, lineWarnings),
     () => transformClassDef(transformed, sourceLang, targetLang, lineWarnings),
     () => transformImportStatement(transformed, sourceLang, targetLang, lineWarnings),
+    () => transformMethods(transformed, sourceLang, targetLang, lineWarnings),
     () => transformPrintStatement(transformed, sourceLang, targetLang, lineWarnings),
     () => transformConditionals(transformed, sourceLang, targetLang, lineWarnings),
     () => transformLoops(transformed, sourceLang, targetLang, lineWarnings),
@@ -383,58 +389,75 @@ function transformLine(
   }
 }
 
-// Language-specific transformation functions
 function transformFunctionDef(
   line: string,
   source: SupportedLanguage,
   target: SupportedLanguage,
   warnings: string[]
 ): string {
+  // Case conversion logic
+  const toSnakeCase = (str: string) => str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
+  const toCamelCase = (str: string) => str.replace(/_([a-z])/g, (g) => g[1].toUpperCase())
+
   if (source === 'python') {
     return line.replace(/^(\s*)def\s+(\w+)\s*\((.*?)\)\s*(?:->.*)?:/, (match, indent, name, params) => {
+      let finalName = name
+      if (target === 'javascript' || target === 'typescript' || target === 'java') {
+        finalName = toCamelCase(name)
+      }
+
       switch (target) {
         case 'javascript':
         case 'typescript':
-          return `${indent}function ${name}(${params}) {`
+          return `${indent}function ${finalName}(${params}) {`
         case 'java':
-          return `${indent}public static Object ${name}(${params}) {`
+          return `${indent}public static Object ${finalName}(${params}) {`
         case 'cpp':
-          return `${indent}void ${name}(${params}) {`
+          return `${indent}void ${finalName}(${params}) {`
         case 'csharp':
-          return `${indent}public static object ${name}(${params}) {`
+          return `${indent}public static object ${finalName}(${params}) {`
         case 'go':
-          return `${indent}func ${name}(${params}) {`
+          return `${indent}func ${finalName.charAt(0).toUpperCase() + finalName.slice(1)}(${params}) {`
         case 'rust':
-          return `${indent}fn ${name}(${params}) {`
+          return `${indent}fn ${finalName}(${params}) {`
         case 'php':
-          return `${indent}function ${name}(${params}) {`
+          return `${indent}function ${finalName}(${params}) {`
         case 'ruby':
-          return `${indent}def ${name}(${params})`
+          return `${indent}def ${finalName}(${params})`
+        case 'swift':
+          return `${indent}func ${finalName}(${params}) {`
         default:
           return line
       }
     })
   }
 
-  if (source === 'javascript' || source === 'typescript') {
-    return line.replace(/^(\s*)(?:async\s+)?function\s+(\w+)\s*\((.*?)\)\s*{/, (match, indent, name, params) => {
+  if (source === 'javascript' || source === 'typescript' || source === 'swift') {
+    return line.replace(/^(\s*)(?:async\s+)?(?:function\s+|func\s+)(\w+)\s*\((.*?)\)\s*{/, (match, indent, name, params) => {
+      let finalName = name
+      if (target === 'python' || target === 'ruby') {
+        finalName = toSnakeCase(name)
+      }
+
       switch (target) {
         case 'python':
-          return `${indent}def ${name}(${params}):`
+          return `${indent}def ${finalName}(${params}):`
         case 'java':
-          return `${indent}public static Object ${name}(${params}) {`
+          return `${indent}public static Object ${finalName}(${params}) {`
         case 'cpp':
-          return `${indent}void ${name}(${params}) {`
+          return `${indent}void ${finalName}(${params}) {`
         case 'csharp':
-          return `${indent}public static object ${name}(${params}) {`
+          return `${indent}public static object ${finalName}(${params}) {`
         case 'go':
-          return `${indent}func ${name}(${params}) {`
+          return `${indent}func ${finalName.charAt(0).toUpperCase() + finalName.slice(1)}(${params}) {`
         case 'rust':
-          return `${indent}fn ${name}(${params}) {`
+          return `${indent}fn ${finalName}(${params}) {`
         case 'php':
-          return `${indent}function ${name}(${params}) {`
+          return `${indent}function ${finalName}(${params}) {`
         case 'ruby':
-          return `${indent}def ${name}(${params})`
+          return `${indent}def ${finalName}(${params})`
+        case 'swift':
+          return `${indent}func ${finalName}(${params}) {`
         default:
           return line
       }
@@ -442,6 +465,39 @@ function transformFunctionDef(
   }
 
   return line
+}
+
+function transformMethods(
+  line: string,
+  source: SupportedLanguage,
+  target: SupportedLanguage,
+  warnings: string[]
+): string {
+  let transformed = line
+
+  // Python list methods to JS/Java
+  if (source === 'python') {
+    transformed = transformed.replace(/\.append\((.*?)\)/g, (match, arg) => {
+      if (target === 'javascript' || target === 'typescript') return `.push(${arg})`
+      if (target === 'java') return `.add(${arg})`
+      return match
+    })
+
+    transformed = transformed.replace(/\.remove\((.*?)\)/g, (match, arg) => {
+      if (target === 'javascript' || target === 'typescript') return `.splice(result.indexOf(${arg}), 1)`
+      if (target === 'java') return `.remove(Integer.valueOf(${arg}))`
+      return match
+    })
+
+    // Math methods
+    if (transformed.includes('sqrt(')) {
+      if (target === 'javascript' || target === 'typescript' || target === 'java' || target === 'cpp' || target === 'csharp' || target === 'swift') {
+        transformed = transformed.replace(/\bsqrt\((.*?)\)/g, 'Math.sqrt($1)')
+      }
+    }
+  }
+
+  return transformed
 }
 
 function transformClassDef(
@@ -471,6 +527,8 @@ function transformClassDef(
           return `${indent}class ${name} {`
         case 'ruby':
           return `${indent}class ${name}`
+        case 'swift':
+          return `${indent}class ${name} {`
         default:
           return line
       }
@@ -490,22 +548,29 @@ function transformImportStatement(
   if (source === 'python') {
     if (line.includes('import ')) {
       return line.replace(/^(\s*)(?:from\s+(\S+)\s+)?import\s+([\w\s,.*]+)/, (match, indent, module, names) => {
+        const cleanModule = (module || 'module').trim()
+        let finalModule = cleanModule
+        if (target === 'javascript' || target === 'typescript') {
+          if (cleanModule === 'math') finalModule = 'Math'
+          if (cleanModule === 'sys') finalModule = 'Sys'
+        }
+
         switch (target) {
           case 'javascript':
           case 'typescript':
-            return `${indent}import ${names} from '${module || 'module'}';`
+            return `${indent}import ${names} from '${finalModule}';`
           case 'java':
-            return `${indent}import ${module}.*;`
+            return `${indent}import ${cleanModule}.*;`
           case 'cpp':
-            return `${indent}#include "${module || 'module.h'}"`
+            return `${indent}#include "${cleanModule}.h"`
           case 'go':
-            return `${indent}import "${module || 'package'}"`
+            return `${indent}import "${cleanModule}"`
           case 'csharp':
-            return `${indent}using ${module || 'Namespace'};`
+            return `${indent}using ${cleanModule.charAt(0).toUpperCase() + cleanModule.slice(1)};`
           case 'php':
-            return `${indent}require('${module || 'module'}');`
+            return `${indent}require('${cleanModule}');`
           case 'ruby':
-            return `${indent}require '${module || 'module'}'`
+            return `${indent}require '${cleanModule}'`
           default:
             return line
         }
@@ -526,21 +591,10 @@ function transformPrintStatement(
   if (source === 'python' && line.includes('print')) {
     return line.replace(/\bprint\s*\((.*?)\)(?=;|$)/g, (match, args) => {
       switch (target) {
-        case 'javascript':
-        case 'typescript':
-          return `console.log(${args})`
-        case 'java':
-          return `System.out.println(${args})`
-        case 'cpp':
-          return `std::cout << ${args} << std::endl;`
-        case 'go':
-          return `fmt.Println(${args})`
-        case 'csharp':
-          return `Console.WriteLine(${args});`
-        case 'php':
-          return `echo ${args};`
         case 'ruby':
           return `puts ${args}`
+        case 'swift':
+          return `print(${args})`
         default:
           return match
       }
@@ -622,6 +676,10 @@ function transformConditionals(
         return `${indent}if ${cleanCond} {`
       case 'csharp':
         return `${indent}if (${cleanCond}) {`
+      case 'ruby':
+        return `${indent}if ${cleanCond}`
+      case 'swift':
+        return `${indent}if ${cleanCond} {`
       default:
         return match
     }
@@ -634,19 +692,60 @@ function transformLoops(
   target: SupportedLanguage,
   warnings: string[]
 ): string {
-  // For loops
+  // Python for loops
   if (source === 'python') {
-    return line.replace(/^(\s*)for\s+(\w+)\s+in\s+([\w.]+)\s*:/, (match, indent, var_, iter) => {
+    return line.replace(/^(\s*)for\s+(\w+)\s+in\s+([\w.()]+)\s*:/, (match, indent, var_, iter) => {
+      // Handle range()
+      if (iter.startsWith('range(')) {
+        const rangeMatch = iter.match(/range\((.*?)\)/)
+        if (rangeMatch) {
+          const args = rangeMatch[1].split(',').map((a: string) => a.trim())
+          const start = args.length > 1 ? args[0] : '0'
+          const end = args.length > 1 ? args[1] : args[0]
+          const step = args.length > 2 ? args[2] : '1'
+
+          switch (target) {
+            case 'javascript':
+            case 'typescript':
+            case 'java':
+            case 'cpp':
+            case 'csharp':
+              return `${indent}for (let ${var_} = ${start}; ${var_} < ${end}; ${var_} += ${step}) {`
+            case 'go':
+              return `${indent}for ${var_} := ${start}; ${var_} < ${end}; ${var_} += ${step} {`
+            case 'rust':
+              return `${indent}for ${var_} in ${start}..${end} {`
+            default:
+              return match
+          }
+        }
+      }
+
       switch (target) {
-        case 'javascript':
-        case 'typescript':
-          return `${indent}for (let ${var_} of ${iter}) {`
+        case 'php':
+          return `${indent}foreach ($${iter} as $${var_}) {`
+        case 'swift':
+          return `${indent}for ${var_} in ${iter} {`
+        default:
+          return match
+      }
+    })
+  }
+
+  // JS/TS for-of loops
+  if (['javascript', 'typescript'].includes(source)) {
+    return line.replace(/^(\s*)for\s*\((?:const|let|var)\s+(\w+)\s+of\s+([\w.]+)\)\s*{/, (match, indent, var_, iter) => {
+      switch (target) {
+        case 'python':
+          return `${indent}for ${var_} in ${iter}:`
+        case 'go':
+          return `${indent}for _, ${var_} := range ${iter} {`
+        case 'rust':
+          return `${indent}for ${var_} in ${iter} {`
         case 'java':
-          return `${indent}for (var ${var_} : ${iter}) {`
+          return `${indent}for (Object ${var_} : ${iter}) {`
         case 'cpp':
           return `${indent}for (auto ${var_} : ${iter}) {`
-        case 'go':
-          return `${indent}for ${var_} := range ${iter} {`
         default:
           return match
       }
@@ -662,13 +761,51 @@ function transformVariableDeclaration(
   target: SupportedLanguage,
   warnings: string[]
 ): string {
-  // Simple assignment pattern
-  return line.replace(/^(\s*)(\w+)\s*=\s*(.+)$/, (match, indent, name, value) => {
+
+  // Handle Typed Declarations (Java/C++/C#) -> Dynamic (Python/JS)
+  // e.g. int x = 5; -> x = 5 or let x = 5;
+  const typedMatch = line.match(/^(\s*)(?:int|string|float|double|bool|boolean|var|auto)\s+(\w+)\s*=\s*(.+?);?$/)
+  if (typedMatch) {
+    const [_, indent, name, value] = typedMatch
     if (target === 'python') {
       return `${indent}${name} = ${value}`
-    } else if (['javascript', 'typescript', 'java', 'cpp', 'csharp', 'go', 'rust', 'php'].includes(target)) {
-      return `${indent}${target === 'python' ? '' : 'const '}${name} = ${value}${target === 'javascript' || target === 'typescript' || target === 'java' || target === 'csharp' ? ';' : ''}`
+    } else if (['javascript', 'typescript'].includes(target)) {
+      return `${indent}let ${name} = ${value};`
+    } else if (target === 'go') {
+      return `${indent}${name} := ${value}`
+    } else if (target === 'rust') {
+      return `${indent}let ${name} = ${value};`
     }
+  }
+
+
+  // Simple assignment pattern (Dynamic -> Typed/Dynamic)
+  return line.replace(/^(\s*)(?:const|let|var)?\s*(\w+)\s*=\s*(.+?);?$/, (match, indent, name, value) => {
+    // If it was already a declaration in source (has const/let/var), remove it for matching
+
+    if (target === 'python') {
+      return `${indent}${name} = ${value}`
+    } else if (['javascript', 'typescript'].includes(target)) {
+      // If source had const/let, preserve or default to const
+      const isConst = line.includes('const ')
+      return `${indent}${isConst ? 'const' : 'let'} ${name} = ${value};`
+
+    } else if (['java', 'csharp'].includes(target)) {
+      // Inference where possible
+      const inferredType = 'var' // C# and Java 10+ support var
+      return `${indent}${inferredType} ${name} = ${value};`
+    } else if (target === 'cpp') {
+      return `${indent}auto ${name} = ${value};`
+    } else if (target === 'go') {
+      return `${indent}${name} := ${value}`
+    } else if (target === 'rust') {
+      return `${indent}let ${name} = ${value};`
+    } else if (target === 'php') {
+      return `${indent}$${name} = ${value};`
+    } else if (target === 'swift') {
+      return `${indent}var ${name} = ${value}`
+    }
+
     return match
   })
 }

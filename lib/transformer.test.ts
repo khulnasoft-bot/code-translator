@@ -167,6 +167,56 @@ z = [1, 2, 3]`,
     sourceLanguage: 'python',
     targetLanguage: 'javascript',
   },
+
+  // NEW TESTS
+  // JS for-of loop to Python
+  {
+    name: 'JS for-of loop to Python',
+    source: `for (const item of items) {
+    console.log(item)
+}`,
+    sourceLanguage: 'javascript',
+    targetLanguage: 'python',
+  },
+  // Java Typed Variable to Python
+  {
+    name: 'Java int to Python',
+    source: `int count = 42;`,
+    sourceLanguage: 'java',
+    targetLanguage: 'python',
+  },
+  // Python elif to JS else if
+  {
+    name: 'Python elif to JS',
+    source: `if x > 10:
+    print("big")
+elif x > 5:
+    print("medium")`,
+    sourceLanguage: 'python',
+    targetLanguage: 'javascript',
+  },
+  // Python to Swift
+  {
+    name: 'Python function to Swift',
+    source: `def greet(name):
+    print(f"Hello, {name}!")`,
+    sourceLanguage: 'python',
+    targetLanguage: 'swift',
+  },
+  // Hybrid Test
+  {
+    name: 'Hybrid Python/JS',
+    source: `def process_data(items)
+    const result = []
+    for item in items:
+        if item > 10 {
+            result.append(item)
+        }
+    print(result)
+    return result`,
+    sourceLanguage: 'python',
+    targetLanguage: 'javascript',
+  },
 ]
 
 export function runTests(): { passed: number; failed: number; results: any[] } {
@@ -214,6 +264,7 @@ export function testLanguageDetection() {
     { code: 'public class Test {}', expected: 'java' },
     { code: '#include <iostream>', expected: 'cpp' },
     { code: 'package main; func main() {}', expected: 'go' },
+    { code: 'import Foundation; func greet() { let x = 1 }', expected: 'swift' },
   ]
 
   const results = detectionTests.map((test) => ({
@@ -291,7 +342,7 @@ export function testCodeNormalization() {
  */
 export function displayTestResults() {
   console.log('[Transformer Test Suite]')
-  console.log('=' * 50)
+  console.log('='.repeat(50))
 
   // Run transformation tests
   console.log('\nTransformation Tests:')
@@ -326,3 +377,6 @@ export function displayTestResults() {
     console.log(`  Warnings: ${test.warnings.length}`)
   })
 }
+
+// Run tests
+displayTestResults()
